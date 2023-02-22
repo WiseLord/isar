@@ -1,0 +1,9 @@
+#!/bin/bash
+
+sudo update-binfmts --enable && [ -f /proc/sys/fs/binfmt_misc/status ]
+
+if [ -n "$1" ]; then
+    exec "$@"
+else
+    exec bash
+fi

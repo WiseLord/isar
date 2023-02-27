@@ -222,14 +222,12 @@ class CIBuilder(Test):
 
         return env['LAYERDIR_' + layer].strip('"')
 
-    def get_ssh_cmd_prefix(self, port, priv_key):
-        port_args = ''
-        if port:
-            port_args = ' -p ' + str(port)
+    def get_ssh_cmd_prefix(self, user, host, port, priv_key):
+        cmd_prefix = 'ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no '\
+                     '-p %s -o IdentityFile=%s %s@%s ' \
+                     % (port, priv_key, user, host)
 
-        cmd_prefix = 'ssh' + port_args + \
-                     ' -o ConnectTimeout=5 -o IdentityFile=' + priv_key + \
-                     ' -o StrictHostKeyChecking=no ci@localhost '
+        self.log.debug('Connect command:\n' + cmd_prefix)
 
         return cmd_prefix
 
@@ -273,6 +271,25 @@ class CIBuilder(Test):
             self.log.error('SSH server is not ready')
 
         return rc
+
+
+    def prepare_priv_key(self):
+        # copy private key to build directory (that is writable)
+        priv_key = '%s/ci_priv_key' % self.build_dir
+        if not os.path.exists(priv_key):
+            shutil.copy(os.path.dirname(__file__) + '/keys/ssh/id_rsa', priv_key)
+        os.chmod(priv_key, 0o400)
+
+        return priv_key
+
+
+    def run_cmd_or_script(self, cmd_prefix, cmd=None, script=None):
+        if cmd is not None:
+            rc = self.exec_cmd(cmd, cmd_prefix)
+            self.log.debug('`' + cmd + '` returned ' + str(rc))
+        elif script is not None:
+            rc = self.run_script(script, cmd_prefix)
+            self.log.debug('`' + script + '` returned ' + str(rc))
 
 
     def vm_start(self, arch='amd64', distro='buster',
@@ -338,30 +355,20 @@ class CIBuilder(Test):
         if cmd is not None or script is not None:
             rc = None
             try:
-                port = None
+                port = 22
                 for arg in cmdline:
                     match = re.match(r".*hostfwd=tcp::(\d*).*", arg)
                     if match:
                         port = match.group(1)
                         break
 
-                # copy private key to build directory
-                priv_key = '%s/ci_priv_key' % self.build_dir
-                if not os.path.exists(priv_key):
-                    shutil.copy(os.path.dirname(__file__) + '/keys/ssh/id_rsa', priv_key)
-                    os.chmod(priv_key, 0o400)
+                priv_key = self.prepare_priv_key()
+                cmd_prefix = self.get_ssh_cmd_prefix('ci', 'localhost', port, priv_key)
 
-                cmd_prefix = self.get_ssh_cmd_prefix(port, priv_key)
-                self.log.debug('Connect command:\n' + cmd_prefix)
                 rc = self.wait_connection(p1, cmd_prefix, timeout)
 
                 if rc == 0:
-                    if cmd is not None:
-                        rc = self.exec_cmd(cmd, cmd_prefix)
-                        self.log.debug('`' + cmd + '` returned ' + str(rc))
-                    elif script is not None:
-                        rc = self.run_script(script, cmd_prefix)
-                        self.log.debug('`' + script + '` returned ' + str(rc))
+                    rc = self.run_cmd_or_script(cmd_prefix, cmd, script)
 
             finally:
                 if p1.poll() is None:
